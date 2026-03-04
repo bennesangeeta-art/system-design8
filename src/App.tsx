@@ -1,7 +1,77 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Link, useNavigate } from 'react-router-dom';
-import { Menu, X, Briefcase, Bookmark, Mail, Search, MapPin, Briefcase as BriefcaseIcon, Clock, ExternalLink, ChevronRight, Filter } from 'lucide-react';
+import { Menu, X, Briefcase, Bookmark, Mail, Search, MapPin, Briefcase as BriefcaseIcon, Clock, ExternalLink, ChevronRight, Filter, AlertCircle, ChevronDown } from 'lucide-react';
 import { JOBS, Job } from './data/jobs';
+
+// --- Types ---
+
+interface Preferences {
+    roleKeywords: string;
+    preferredLocations: string[];
+    preferredMode: string[];
+    experienceLevel: string;
+    skills: string;
+    minMatchScore: number;
+}
+
+const DEFAULT_PREFS: Preferences = {
+    roleKeywords: '',
+    preferredLocations: [],
+    preferredMode: [],
+    experienceLevel: '',
+    skills: '',
+    minMatchScore: 40
+};
+
+// --- Helper Functions ---
+
+const calculateMatchScore = (job: Job, prefs: Preferences | null): number => {
+    if (!prefs) return 0;
+    let score = 0;
+    const roleKeywords = (prefs.roleKeywords || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+    const userSkills = (prefs.skills || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+    // Rule 1: +25 if any roleKeyword in title
+    if (roleKeywords.some(k => job.title.toLowerCase().includes(k))) score += 25;
+
+    // Rule 2: +15 if any roleKeyword in description
+    if (roleKeywords.some(k => job.description.toLowerCase().includes(k))) score += 15;
+
+    // Rule 3: +15 if location matches
+    if (prefs.preferredLocations.includes(job.location)) score += 15;
+
+    // Rule 4: +10 if mode matches
+    if (prefs.preferredMode.includes(job.mode)) score += 10;
+
+    // Rule 5: +10 if experience matches
+    if (job.experience === prefs.experienceLevel) score += 10;
+
+    // Rule 6: +15 if any skill match
+    if (job.skills.some(s => userSkills.includes(s.toLowerCase()))) score += 15;
+
+    // Rule 7: +5 if posted <= 2 days
+    if (job.postedDaysAgo <= 2) score += 5;
+
+    // Rule 8: +5 if source is LinkedIn
+    if (job.source === 'LinkedIn') score += 5;
+
+    return Math.min(score, 100);
+};
+
+const getScoreVariant = (score: number) => {
+    if (score >= 80) return { bg: '#E6F4EA', color: '#1E4620', label: 'Excellent Match' };
+    if (score >= 60) return { bg: '#FFF4E5', color: '#663C00', label: 'Good Match' };
+    if (score >= 40) return { bg: '#F1F3F4', color: '#3C4043', label: 'Neutral Match' };
+    return { bg: '#F8F9FA', color: '#70757A', label: 'Subtle Match' };
+};
+
+const getSalaryValue = (s: string) => {
+    const match = s.match(/(\d+(\.\d+)?)/);
+    if (!match) return 0;
+    const val = parseFloat(match[1]);
+    if (s.toLowerCase().includes('month')) return val / 12; // Normalize monthly to annual LPA (rough)
+    return val;
+};
 
 // --- Components ---
 
@@ -48,10 +118,23 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean, onClose:
     );
 }
 
-function JobCard({ job, onSave, onUnsave, isSaved, onView }: { job: Job, onSave: (id: string) => void, onUnsave: (id: string) => void, isSaved: boolean, onView: (job: Job) => void }) {
+function JobCard({ job, onSave, onUnsave, isSaved, onView, matchScore }: { job: Job, onSave: (id: string) => void, onUnsave: (id: string) => void, isSaved: boolean, onView: (job: Job) => void, matchScore?: number }) {
+    const scoreInfo = matchScore !== undefined ? getScoreVariant(matchScore) : null;
+
     return (
-        <div className="card" style={{ marginBottom: 'var(--space-24)', transition: 'transform 0.2s', cursor: 'default' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-16)' }}>
+        <div className="card" style={{ marginBottom: 'var(--space-24)', transition: 'transform 0.2s', cursor: 'default', position: 'relative' }}>
+            {matchScore !== undefined && (
+                <div style={{
+                    position: 'absolute', top: '16px', right: '16px',
+                    backgroundColor: scoreInfo?.bg, color: scoreInfo?.color,
+                    padding: '4px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
+                    border: `1px solid ${scoreInfo?.color}22`,
+                    display: 'flex', alignItems: 'center', gap: '4px'
+                }}>
+                    {matchScore}% Match
+                </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-16)', paddingRight: matchScore !== undefined ? '100px' : '0' }}>
                 <div>
                     <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>{job.title}</h3>
                     <p style={{ margin: '4px 0 0 0', color: 'var(--color-accent)', fontWeight: 500 }}>{job.company}</p>
@@ -133,7 +216,9 @@ function DashboardPage() {
     const [mode, setMode] = useState('');
     const [exp, setExp] = useState('');
     const [source, setSource] = useState('');
-    const [sort, setSort] = useState('latest');
+    const [sort, setSort] = useState('match');
+    const [showOnlyMatches, setShowOnlyMatches] = useState(false);
+    const [prefs, setPrefs] = useState<Preferences | null>(null);
 
     const [savedIds, setSavedIds] = useState<string[]>([]);
     const [selectedJob, setSelectedJob] = useState<Job | null>(null);
@@ -141,6 +226,9 @@ function DashboardPage() {
     useEffect(() => {
         const saved = localStorage.getItem('savedJobs');
         if (saved) setSavedIds(JSON.parse(saved));
+
+        const storedPrefs = localStorage.getItem('jobTrackerPreferences');
+        if (storedPrefs) setPrefs(JSON.parse(storedPrefs));
     }, []);
 
     const handleSave = (id: string) => {
@@ -155,8 +243,15 @@ function DashboardPage() {
         localStorage.setItem('savedJobs', JSON.stringify(newSaved));
     };
 
+    const jobsWithScores = useMemo(() => {
+        return JOBS.map(job => ({
+            ...job,
+            matchScore: calculateMatchScore(job, prefs)
+        }));
+    }, [prefs]);
+
     const filteredJobs = useMemo(() => {
-        return JOBS
+        return jobsWithScores
             .filter(job => {
                 const matchesSearch = job.title.toLowerCase().includes(search.toLowerCase()) ||
                     job.company.toLowerCase().includes(search.toLowerCase());
@@ -164,18 +259,34 @@ function DashboardPage() {
                 const matchesMode = mode === '' || job.mode === mode;
                 const matchesExp = exp === '' || job.experience === exp;
                 const matchesSource = source === '' || job.source === source;
-                return matchesSearch && matchesLoc && matchesMode && matchesExp && matchesSource;
+                const passesThreshold = !showOnlyMatches || (prefs && job.matchScore >= prefs.minMatchScore);
+                return matchesSearch && matchesLoc && matchesMode && matchesExp && matchesSource && passesThreshold;
             })
             .sort((a, b) => {
                 if (sort === 'latest') return a.postedDaysAgo - b.postedDaysAgo;
+                if (sort === 'match') return b.matchScore - a.matchScore;
+                if (sort === 'salary') return getSalaryValue(b.salaryRange) - getSalaryValue(a.salaryRange);
                 return 0;
             });
-    }, [search, location, mode, exp, source, sort]);
+    }, [jobsWithScores, search, location, mode, exp, source, sort, showOnlyMatches, prefs]);
 
     const uniqueLocations = Array.from(new Set(JOBS.map(j => j.location)));
 
     return (
-        <PageContainer maxWidth="900px">
+        <PageContainer maxWidth="940px">
+            {!prefs && (
+                <div style={{
+                    backgroundColor: '#FFF4E5', border: '1px solid #FFE2B7', borderRadius: 'var(--border-radius)',
+                    padding: 'var(--space-16) var(--space-24)', marginBottom: 'var(--space-32)',
+                    display: 'flex', alignItems: 'center', gap: 'var(--space-12)', color: '#663C00'
+                }}>
+                    <AlertCircle size={20} />
+                    <span style={{ fontSize: '14px', fontWeight: 500 }}>
+                        Set your <Link to="/settings" style={{ color: 'inherit', textDecoration: 'underline' }}>preferences</Link> to activate intelligent matching.
+                    </span>
+                </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 'var(--space-40)' }}>
                 <div>
                     <h1 style={{ fontSize: '40px', marginBottom: 'var(--space-8)' }}>Dashboard</h1>
@@ -188,7 +299,7 @@ function DashboardPage() {
 
             {/* Filter Bar */}
             <div className="card" style={{ marginBottom: 'var(--space-40)', padding: 'var(--space-24)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-16)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-16)', marginBottom: 'var(--space-24)' }}>
                     <div style={{ position: 'relative' }}>
                         <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: '#888' }} />
                         <input
@@ -217,13 +328,28 @@ function DashboardPage() {
                         <option value="3-5">3-5 Years</option>
                     </select>
                     <select value={sort} onChange={e => setSort(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: '#fff' }}>
+                        <option value="match">Match Score (High-Low)</option>
                         <option value="latest">Latest First</option>
+                        <option value="salary">Salary (High-Low)</option>
                     </select>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderTop: '1px solid #EEE', paddingTop: '16px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: 500 }}>
+                        <input
+                            type="checkbox"
+                            checked={showOnlyMatches}
+                            onChange={e => setShowOnlyMatches(e.target.checked)}
+                            disabled={!prefs}
+                            style={{ width: '16px', height: '16px' }}
+                        />
+                        Show only jobs above my threshold ({prefs?.minMatchScore || 40}%)
+                    </label>
                 </div>
             </div>
 
             {filteredJobs.length > 0 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: 'var(--space-24)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 'var(--space-24)' }}>
                     {filteredJobs.map(job => (
                         <JobCard
                             key={job.id}
@@ -232,6 +358,7 @@ function DashboardPage() {
                             onUnsave={handleUnsave}
                             isSaved={savedIds.includes(job.id)}
                             onView={setSelectedJob}
+                            matchScore={prefs ? job.matchScore : undefined}
                         />
                     ))}
                 </div>
@@ -239,9 +366,9 @@ function DashboardPage() {
                 <div className="card" style={{ textAlign: 'center', padding: 'var(--space-64) var(--space-16)' }}>
                     <Filter size={48} color="#ccc" style={{ marginBottom: 'var(--space-16)' }} />
                     <p style={{ fontSize: '18px', color: '#555', margin: '0 auto', maxWidth: '400px' }}>
-                        No jobs match your search. Try adjusting the filters.
+                        {prefs ? "No roles match your criteria. Adjust filters or lower threshold." : "No jobs match your search. Try adjusting the filters."}
                     </p>
-                    <button onClick={() => { setSearch(''); setLocation(''); setMode(''); setExp(''); setSource(''); }} style={{ marginTop: 'var(--space-16)', background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', textDecoration: 'underline' }}>
+                    <button onClick={() => { setSearch(''); setLocation(''); setMode(''); setExp(''); setSource(''); setShowOnlyMatches(false); }} style={{ marginTop: 'var(--space-16)', background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', textDecoration: 'underline' }}>
                         Clear all filters
                     </button>
                 </div>
@@ -250,7 +377,19 @@ function DashboardPage() {
             <Modal isOpen={!!selectedJob} onClose={() => setSelectedJob(null)} title={selectedJob?.title || ''}>
                 {selectedJob && (
                     <>
-                        <p style={{ color: 'var(--color-accent)', fontWeight: 600, fontSize: '18px', marginBottom: 'var(--space-16)' }}>{selectedJob.company}</p>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-16)' }}>
+                            <p style={{ color: 'var(--color-accent)', fontWeight: 600, fontSize: '18px', margin: 0 }}>{selectedJob.company}</p>
+                            {selectedJob.matchScore !== undefined && (
+                                <div style={{
+                                    backgroundColor: getScoreVariant(selectedJob.matchScore).bg,
+                                    color: getScoreVariant(selectedJob.matchScore).color,
+                                    padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: 600,
+                                    border: `1px solid ${getScoreVariant(selectedJob.matchScore).color}33`
+                                }}>
+                                    {selectedJob.matchScore}% Match
+                                </div>
+                            )}
+                        </div>
                         <div style={{ display: 'flex', gap: '12px', marginBottom: 'var(--space-24)', color: '#666', fontSize: '14px' }}>
                             <span>{selectedJob.location} • {selectedJob.mode}</span>
                             <span>{selectedJob.experience}</span>
@@ -285,41 +424,136 @@ function DashboardPage() {
 }
 
 function SettingsPage() {
+    const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
+    const [status, setStatus] = useState('');
+
+    useEffect(() => {
+        const stored = localStorage.getItem('jobTrackerPreferences');
+        if (stored) setPrefs(JSON.parse(stored));
+    }, []);
+
+    const handleChange = (field: keyof Preferences, value: any) => {
+        setPrefs(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleModeToggle = (mode: string) => {
+        const current = prefs.preferredMode;
+        if (current.includes(mode)) {
+            handleChange('preferredMode', current.filter(m => m !== mode));
+        } else {
+            handleChange('preferredMode', [...current, mode]);
+        }
+    };
+
+    const handleSave = () => {
+        localStorage.setItem('jobTrackerPreferences', JSON.stringify(prefs));
+        setStatus('Preferences saved successfully!');
+        setTimeout(() => setStatus(''), 3000);
+    };
+
+    const uniqueLocations = Array.from(new Set(JOBS.map(j => j.location)));
+
     return (
-        <PageContainer>
+        <PageContainer maxWidth="800px">
             <h1 style={{ fontSize: '40px', marginBottom: 'var(--space-24)' }}>Discovery Settings</h1>
             <div className="card">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-24)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-32)' }}>
                     <div>
-                        <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 500 }}>Role Keywords</label>
-                        <input type="text" placeholder="e.g. Senior Frontend Engineer, Product Designer" />
+                        <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 600 }}>Role Keywords</label>
+                        <p style={{ fontSize: '13px', color: '#666', marginBottom: 'var(--space-8)' }}>Target specific titles (comma separated).</p>
+                        <input
+                            type="text"
+                            placeholder="e.g. SDE Intern, Frontend Developer"
+                            value={prefs.roleKeywords}
+                            onChange={e => handleChange('roleKeywords', e.target.value)}
+                        />
                     </div>
+
                     <div>
-                        <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 500 }}>Preferred Locations</label>
-                        <input type="text" placeholder="e.g. Remote, New York, London" />
+                        <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 600 }}>Preferred Locations</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                            {prefs.preferredLocations.map(loc => (
+                                <Badge key={loc} variant="accent">
+                                    {loc} <X size={12} style={{ marginLeft: '4px', cursor: 'pointer' }} onClick={() => handleChange('preferredLocations', prefs.preferredLocations.filter(l => l !== loc))} />
+                                </Badge>
+                            ))}
+                        </div>
+                        <select
+                            onChange={e => {
+                                if (e.target.value && !prefs.preferredLocations.includes(e.target.value)) {
+                                    handleChange('preferredLocations', [...prefs.preferredLocations, e.target.value]);
+                                }
+                            }}
+                            className="input"
+                            style={{ width: '100%', padding: '12px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                        >
+                            <option value="">Add a location...</option>
+                            {uniqueLocations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                        </select>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-16)' }}>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: 'var(--space-12)', fontWeight: 600 }}>Preferred Work Mode</label>
+                        <div style={{ display: 'flex', gap: '24px' }}>
+                            {['Remote', 'Hybrid', 'Onsite'].map(mode => (
+                                <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '15px' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={prefs.preferredMode.includes(mode)}
+                                        onChange={() => handleModeToggle(mode)}
+                                        style={{ width: '18px', height: '18px' }}
+                                    />
+                                    {mode}
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-24)' }}>
                         <div>
-                            <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 500 }}>Work Mode</label>
-                            <select style={{ width: '100%', padding: 'var(--space-8)', borderRadius: 'var(--border-radius)', border: '1px solid var(--border-color)', background: 'transparent' }}>
-                                <option>Remote</option>
-                                <option>Hybrid</option>
-                                <option>Onsite</option>
+                            <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 600 }}>Experience Level</label>
+                            <select
+                                value={prefs.experienceLevel}
+                                onChange={e => handleChange('experienceLevel', e.target.value)}
+                                style={{ width: '100%', padding: '12px', borderRadius: '4px', border: '1px solid var(--border-color)', background: '#fff' }}
+                            >
+                                <option value="">Select Level</option>
+                                <option value="Fresher">Fresher</option>
+                                <option value="0-1">0-1 Year</option>
+                                <option value="1-3">1-3 Years</option>
+                                <option value="3-5">3-5 Years</option>
                             </select>
                         </div>
                         <div>
-                            <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 500 }}>Experience Level</label>
-                            <select style={{ width: '100%', padding: 'var(--space-8)', borderRadius: 'var(--border-radius)', border: '1px solid var(--border-color)', background: 'transparent' }}>
-                                <option>Entry Level</option>
-                                <option>Mid-Senior</option>
-                                <option>Director</option>
-                                <option>Executive</option>
-                            </select>
+                            <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 600 }}>Min Match Score ({prefs.minMatchScore}%)</label>
+                            <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                value={prefs.minMatchScore}
+                                onChange={e => handleChange('minMatchScore', parseInt(e.target.value))}
+                                style={{ width: '100%', marginTop: '12px' }}
+                            />
                         </div>
                     </div>
-                    <button className="btn-primary" style={{ alignSelf: 'flex-start', marginTop: 'var(--space-8)' }}>
-                        Save Preferences
-                    </button>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: 'var(--space-8)', fontWeight: 600 }}>Core Skills</label>
+                        <p style={{ fontSize: '13px', color: '#666', marginBottom: 'var(--space-8)' }}>Key technologies you master (comma separated).</p>
+                        <input
+                            type="text"
+                            placeholder="e.g. React, Node.js, Python"
+                            value={prefs.skills}
+                            onChange={e => handleChange('skills', e.target.value)}
+                        />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: 'var(--space-8)' }}>
+                        <button className="btn-primary" onClick={handleSave} style={{ padding: '12px 32px' }}>
+                            Save Preferences
+                        </button>
+                        {status && <span style={{ color: '#2E7D32', fontSize: '14px', fontWeight: 500 }}>{status}</span>}
+                    </div>
                 </div>
             </div>
         </PageContainer>
@@ -327,14 +561,23 @@ function SettingsPage() {
 }
 
 function SavedPage() {
-    const [savedJobs, setSavedJobs] = useState<Job[]>([]);
-    const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+    const [savedJobs, setSavedJobs] = useState<(Job & { matchScore?: number })[]>([]);
+    const [selectedJob, setSelectedJob] = useState<(Job & { matchScore?: number }) | null>(null);
+    const [prefs, setPrefs] = useState<Preferences | null>(null);
 
     useEffect(() => {
+        const storedPrefs = localStorage.getItem('jobTrackerPreferences');
+        const p = storedPrefs ? JSON.parse(storedPrefs) : null;
+        setPrefs(p);
+
         const savedIdsString = localStorage.getItem('savedJobs');
         if (savedIdsString) {
             const savedIds: string[] = JSON.parse(savedIdsString);
-            setSavedJobs(JOBS.filter(job => savedIds.includes(job.id)));
+            const filtered = JOBS.filter(job => savedIds.includes(job.id)).map(job => ({
+                ...job,
+                matchScore: calculateMatchScore(job, p)
+            }));
+            setSavedJobs(filtered);
         }
     }, []);
 
@@ -342,6 +585,9 @@ function SavedPage() {
         const newJobs = savedJobs.filter(job => job.id !== id);
         setSavedJobs(newJobs);
         localStorage.setItem('savedJobs', JSON.stringify(newJobs.map(j => j.id)));
+        if (selectedJob?.id === id) {
+            setSelectedJob(null);
+        }
     };
 
     return (
@@ -359,6 +605,7 @@ function SavedPage() {
                             onUnsave={handleUnsave}
                             isSaved={true}
                             onView={setSelectedJob}
+                            matchScore={job.matchScore}
                         />
                     ))}
                 </div>
@@ -375,7 +622,19 @@ function SavedPage() {
             <Modal isOpen={!!selectedJob} onClose={() => setSelectedJob(null)} title={selectedJob?.title || ''}>
                 {selectedJob && (
                     <>
-                        <p style={{ color: 'var(--color-accent)', fontWeight: 600, fontSize: '18px', marginBottom: 'var(--space-16)' }}>{selectedJob.company}</p>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-16)' }}>
+                            <p style={{ color: 'var(--color-accent)', fontWeight: 600, fontSize: '18px', margin: 0 }}>{selectedJob.company}</p>
+                            {selectedJob.matchScore !== undefined && (
+                                <div style={{
+                                    backgroundColor: getScoreVariant(selectedJob.matchScore).bg,
+                                    color: getScoreVariant(selectedJob.matchScore).color,
+                                    padding: '4px 12px', borderRadius: '20px', fontSize: '13px', fontWeight: 600,
+                                    border: `1px solid ${getScoreVariant(selectedJob.matchScore).color}33`
+                                }}>
+                                    {selectedJob.matchScore}% Match
+                                </div>
+                            )}
+                        </div>
                         <div style={{ display: 'flex', gap: '12px', marginBottom: 'var(--space-24)', color: '#666', fontSize: '14px' }}>
                             <span>{selectedJob.location} • {selectedJob.mode}</span>
                             <span>{selectedJob.experience}</span>
