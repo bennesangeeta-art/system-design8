@@ -1001,6 +1001,171 @@ function DigestPage() {
     );
 }
 
+function TestChecklistPage() {
+    const [testStatus, setTestStatus] = useState<Record<string, boolean>>({});
+    const navigate = useNavigate();
+
+    const testItems = [
+        { id: 'prefs_persist', label: 'Preferences persist after refresh', how: 'Change settings, refresh page, check if values remain.' },
+        { id: 'score_correct', label: 'Match score calculates correctly', how: 'Verify score breakdown matches preference rules.' },
+        { id: 'toggle_works', label: '"Show only matches" toggle works', how: 'Toggle on dashboard; check if low-score jobs disappear.' },
+        { id: 'save_job_persist', label: 'Save job persists after refresh', how: 'Save a job, refresh, check /saved page.' },
+        { id: 'apply_new_tab', label: 'Apply opens in new tab', how: 'Click apply; check if new browser tab opens.' },
+        { id: 'status_persist', label: 'Status update persists after refresh', how: 'Change status to Applied, refresh, check badge stable.' },
+        { id: 'filter_works', label: 'Status filter works correctly', how: 'Select "Applied" in filter; only applied jobs should show.' },
+        { id: 'digest_score', label: 'Digest generates top 10 by score', how: 'Check if /digest jobs are sorted by match score.' },
+        { id: 'digest_persist', label: 'Digest persists for the day', how: 'Generate digest, navigate away, return; check if same.' },
+        { id: 'no_errors', label: 'No console errors on main pages', how: 'Open DevTools (F12); verify console is clean.' }
+    ];
+
+    useEffect(() => {
+        const stored = localStorage.getItem('jobTrackerTestStatus');
+        if (stored) setTestStatus(JSON.parse(stored));
+    }, []);
+
+    const toggleTest = (id: string) => {
+        const newStatus = { ...testStatus, [id]: !testStatus[id] };
+        setTestStatus(newStatus);
+        localStorage.setItem('jobTrackerTestStatus', JSON.stringify(newStatus));
+    };
+
+    const resetTests = () => {
+        setTestStatus({});
+        localStorage.setItem('jobTrackerTestStatus', JSON.stringify({}));
+    };
+
+    const passedCount = testItems.filter(item => testStatus[item.id]).length;
+    const allPassed = passedCount === 10;
+
+    return (
+        <PageContainer maxWidth="800px">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-40)' }}>
+                <div>
+                    <h1 style={{ fontSize: '40px', marginBottom: 'var(--space-8)' }}>Test Checklist</h1>
+                    <p style={{ color: '#666', margin: 0 }}>Verify build integrity before deployment.</p>
+                </div>
+                <button onClick={resetTests} style={{ background: 'none', border: 'none', color: 'var(--color-accent)', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}>
+                    Reset Test Status
+                </button>
+            </div>
+
+            <div className="card" style={{ marginBottom: 'var(--space-32)', backgroundColor: allPassed ? '#F1F8E9' : '#FFF9C4', border: `1px solid ${allPassed ? '#C5E1A5' : '#FFF176'}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                        <h2 style={{ fontSize: '24px', margin: 0, color: allPassed ? '#2E7D32' : '#F57F17' }}>
+                            Tests Passed: {passedCount} / 10
+                        </h2>
+                        {!allPassed && (
+                            <p style={{ margin: 'var(--space-8) 0 0 0', fontSize: '14px', color: '#666' }}>
+                                Resolve all issues before shipping.
+                            </p>
+                        )}
+                    </div>
+                    {allPassed && (
+                        <button className="btn-primary" onClick={() => navigate('/jt/08-ship')}>
+                            Proceed to Ship
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                {testItems.map((item, idx) => (
+                    <div key={item.id} style={{
+                        padding: 'var(--space-20) var(--space-24)',
+                        borderBottom: idx === testItems.length - 1 ? 'none' : '1px solid #eee',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        backgroundColor: testStatus[item.id] ? '#fcfcfc' : '#fff'
+                    }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', flex: 1 }}>
+                            <input
+                                type="checkbox"
+                                checked={!!testStatus[item.id]}
+                                onChange={() => toggleTest(item.id)}
+                                style={{ width: '20px', height: '20px', cursor: 'pointer' }}
+                            />
+                            <span style={{ fontSize: '16px', color: testStatus[item.id] ? '#888' : '#333', textDecoration: testStatus[item.id] ? 'line-through' : 'none' }}>
+                                {item.label}
+                            </span>
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                            <span title={item.how} style={{
+                                width: '20px', height: '20px', borderRadius: '50%',
+                                border: '1px solid #ccc', display: 'flex', alignItems: 'center',
+                                justifyContent: 'center', fontSize: '12px', color: '#999', cursor: 'help'
+                            }}>
+                                ?
+                            </span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </PageContainer>
+    );
+}
+
+function ShipPage() {
+    const [allPassed, setAllPassed] = useState(false);
+    const navigate = useNavigate();
+
+    useEffect(() => {
+        const stored = localStorage.getItem('jobTrackerTestStatus');
+        if (stored) {
+            const status = JSON.parse(stored);
+            const passedCount = Object.values(status).filter(v => v === true).length;
+            setAllPassed(passedCount === 10);
+        }
+    }, []);
+
+    if (!allPassed) {
+        return (
+            <PageContainer>
+                <div style={{ textAlign: 'center', marginTop: 'var(--space-64)' }}>
+                    <div style={{
+                        width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#FFF9C4',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto var(--space-24)'
+                    }}>
+                        <AlertCircle size={40} color="#F57F17" />
+                    </div>
+                    <h1 style={{ fontSize: '32px', marginBottom: 'var(--space-16)' }}>Shipment Locked</h1>
+                    <p style={{ color: '#666', marginBottom: 'var(--space-32)', fontSize: '18px' }}>
+                        Complete all 10 tests before shipping.
+                    </p>
+                    <button className="btn-primary" onClick={() => navigate('/jt/07-test')}>
+                        Go to Test Checklist
+                    </button>
+                </div>
+            </PageContainer>
+        );
+    }
+
+    return (
+        <PageContainer>
+            <div style={{ textAlign: 'center', marginTop: 'var(--space-64)' }}>
+                <div style={{
+                    width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#E8F5E9',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto var(--space-24)'
+                }}>
+                    <BriefcaseIcon size={40} color="#2E7D32" />
+                </div>
+                <h1 style={{ fontSize: '48px', marginBottom: 'var(--space-16)' }}>Ready to Ship</h1>
+                <p style={{ color: '#666', marginBottom: 'var(--space-40)', fontSize: '20px' }}>
+                    All integrity tests passed. Build is stable for deployment.
+                </p>
+                <div className="card" style={{ maxWidth: '400px', margin: '0 auto', textAlign: 'left' }}>
+                    <p style={{ fontFamily: 'monospace', fontSize: '14px', margin: 0 }}>
+                        [System]: Generating build artifact...<br />
+                        [System]: Integrity check: 100%<br />
+                        [System]: Deployment ready.
+                    </p>
+                </div>
+            </div>
+        </PageContainer>
+    );
+}
+
 function ProofPage() {
     return (
         <PageContainer>
@@ -1049,6 +1214,8 @@ function NavigationShell({ children }: { children: React.ReactNode }) {
                         <NavLink to="/saved" onClick={closeMenu} className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Saved</NavLink>
                         <NavLink to="/digest" onClick={closeMenu} className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Digest</NavLink>
                         <NavLink to="/settings" onClick={closeMenu} className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Settings</NavLink>
+                        <NavLink to="/jt/07-test" onClick={closeMenu} className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Test</NavLink>
+                        <NavLink to="/jt/08-ship" onClick={closeMenu} className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Ship</NavLink>
                         <NavLink to="/proof" onClick={closeMenu} className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>Proof</NavLink>
                     </nav>
                 </div>
@@ -1070,6 +1237,8 @@ function App() {
                     <Route path="/saved" element={<SavedPage />} />
                     <Route path="/digest" element={<DigestPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/jt/07-test" element={<TestChecklistPage />} />
+                    <Route path="/jt/08-ship" element={<ShipPage />} />
                     <Route path="/proof" element={<ProofPage />} />
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
