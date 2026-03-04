@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Link, useNavigate } from 'react-router-dom';
-import { Menu, X, Bookmark, Mail, Search, MapPin, Briefcase as BriefcaseIcon, Clock, ExternalLink, Filter, AlertCircle } from 'lucide-react';
+import { Menu, X, Bookmark, Mail, Search, MapPin, Briefcase as BriefcaseIcon, Filter, AlertCircle } from 'lucide-react';
 import { JOBS, Job } from './data/jobs';
 
 // --- Types ---
