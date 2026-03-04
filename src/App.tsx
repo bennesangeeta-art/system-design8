@@ -23,6 +23,42 @@ const DEFAULT_PREFS: Preferences = {
     minMatchScore: 40
 };
 
+type JobStatus = 'Not Applied' | 'Applied' | 'Rejected' | 'Selected';
+
+interface StatusUpdate {
+    jobId: string;
+    jobTitle: string;
+    company: string;
+    status: JobStatus;
+    timestamp: number;
+}
+
+// --- Status Handling ---
+
+const getStatusColor = (status: JobStatus) => {
+    switch (status) {
+        case 'Applied': return '#2196F3';
+        case 'Rejected': return '#F44336';
+        case 'Selected': return '#4CAF50';
+        default: return '#757575';
+    }
+};
+
+const getStatusStyles = (status: JobStatus) => {
+    const color = getStatusColor(status);
+    return {
+        backgroundColor: `${color}11`,
+        color: color,
+        border: `1px solid ${color}33`,
+        padding: '2px 8px',
+        borderRadius: '12px',
+        fontSize: '11px',
+        fontWeight: 600,
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.02em'
+    };
+};
+
 // --- Helper Functions ---
 
 const calculateMatchScore = (job: Job, prefs: Preferences | null): number => {
@@ -73,7 +109,46 @@ const getSalaryValue = (s: string) => {
     return val;
 };
 
+// --- Status Helpers ---
+
+const getJobStatus = (jobId: string): JobStatus => {
+    const statuses = JSON.parse(localStorage.getItem('jobTrackerStatus') || '{}');
+    return statuses[jobId] || 'Not Applied';
+};
+
+const saveJobStatus = (jobId: string, jobTitle: string, company: string, status: JobStatus) => {
+    const statuses = JSON.parse(localStorage.getItem('jobTrackerStatus') || '{}');
+    statuses[jobId] = status;
+    localStorage.setItem('jobTrackerStatus', JSON.stringify(statuses));
+
+    // Update history
+    const history: StatusUpdate[] = JSON.parse(localStorage.getItem('jobTrackerStatusHistory') || '[]');
+    history.unshift({ jobId, jobTitle, company, status, timestamp: Date.now() });
+    localStorage.setItem('jobTrackerStatusHistory', JSON.stringify(history.slice(0, 50)));
+};
+
 // --- Components ---
+
+function Toast({ message, onClear }: { message: string, onClear: () => void }) {
+    useEffect(() => {
+        const timer = setTimeout(onClear, 3000);
+        return () => clearTimeout(timer);
+    }, [message, onClear]);
+
+    if (!message) return null;
+
+    return (
+        <div style={{
+            position: 'fixed', bottom: '40px', left: '50%', transform: 'translateX(-50%)',
+            backgroundColor: '#333', color: '#fff', padding: '12px 24px', borderRadius: '8px',
+            fontSize: '14px', zIndex: 9999, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+            display: 'flex', alignItems: 'center', gap: '12px', pointerEvents: 'none'
+        }}>
+            <AlertCircle size={18} color="#fff" />
+            {message}
+        </div>
+    );
+}
 
 function Badge({ children, variant = 'default' }: { children: React.ReactNode, variant?: 'default' | 'accent' | 'muted' }) {
     const styles: Record<string, React.CSSProperties> = {
@@ -118,8 +193,18 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean, onClose:
     );
 }
 
-function JobCard({ job, onSave, onUnsave, isSaved, onView, matchScore }: { job: Job, onSave: (id: string) => void, onUnsave: (id: string) => void, isSaved: boolean, onView: (job: Job) => void, matchScore?: number }) {
+function JobCard({ job, onSave, onUnsave, isSaved, onView, matchScore, onStatusChange }: {
+    job: Job, onSave: (id: string) => void, onUnsave: (id: string) => void, isSaved: boolean, onView: (job: Job) => void, matchScore?: number,
+    onStatusChange?: (id: string, status: JobStatus) => void
+}) {
     const scoreInfo = matchScore !== undefined ? getScoreVariant(matchScore) : null;
+    const [status, setStatus] = useState<JobStatus>(getJobStatus(job.id));
+
+    const handleStatusClick = (newStatus: JobStatus) => {
+        setStatus(newStatus);
+        saveJobStatus(job.id, job.title, job.company, newStatus);
+        if (onStatusChange) onStatusChange(job.id, newStatus);
+    };
 
     return (
         <div className="card" style={{ marginBottom: 'var(--space-24)', transition: 'transform 0.2s', cursor: 'default', position: 'relative' }}>
@@ -137,7 +222,10 @@ function JobCard({ job, onSave, onUnsave, isSaved, onView, matchScore }: { job: 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-16)', paddingRight: matchScore !== undefined ? '100px' : '0' }}>
                 <div>
                     <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>{job.title}</h3>
-                    <p style={{ margin: '4px 0 0 0', color: 'var(--color-accent)', fontWeight: 500 }}>{job.company}</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                        <p style={{ margin: 0, color: 'var(--color-accent)', fontWeight: 500 }}>{job.company}</p>
+                        <span style={getStatusStyles(status)}>{status}</span>
+                    </div>
                 </div>
                 <Badge variant="muted">{job.source}</Badge>
             </div>
@@ -158,13 +246,33 @@ function JobCard({ job, onSave, onUnsave, isSaved, onView, matchScore }: { job: 
                 {job.skills.slice(0, 3).map(skill => (
                     <Badge key={skill}>{skill}</Badge>
                 ))}
-                {job.skills.length > 3 && <span style={{ fontSize: '12px', color: '#777' }}>+{job.skills.length - 3} more</span>}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: 'var(--space-16)' }}>
-                <span style={{ fontSize: '12px', color: '#888', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Clock size={12} /> {job.postedDaysAgo === 0 ? 'Today' : `${job.postedDaysAgo} days ago`}
-                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    {(['Applied', 'Rejected', 'Selected'] as JobStatus[]).map(s => (
+                        <button
+                            key={s}
+                            onClick={() => handleStatusClick(s)}
+                            style={{
+                                background: status === s ? getStatusColor(s) : 'transparent',
+                                color: status === s ? '#fff' : '#888',
+                                border: `1px solid ${status === s ? getStatusColor(s) : '#ddd'}`,
+                                fontSize: '11px', padding: '2px 10px', borderRadius: '4px', cursor: 'pointer'
+                            }}
+                        >
+                            {s}
+                        </button>
+                    ))}
+                    {status !== 'Not Applied' && (
+                        <button
+                            onClick={() => handleStatusClick('Not Applied')}
+                            style={{ background: 'none', border: 'none', color: '#aaa', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
+                        >
+                            Reset
+                        </button>
+                    )}
+                </div>
                 <div style={{ display: 'flex', gap: 'var(--space-12)' }}>
                     <button onClick={() => onView(job)} style={{ background: 'none', border: 'none', color: '#555', fontSize: '14px', padding: 0, textDecoration: 'underline' }}>View</button>
                     {isSaved ? (
@@ -172,9 +280,6 @@ function JobCard({ job, onSave, onUnsave, isSaved, onView, matchScore }: { job: 
                     ) : (
                         <button onClick={() => onSave(job.id)} style={{ background: 'none', border: 'none', color: '#555', fontSize: '14px', padding: 0 }}>Save</button>
                     )}
-                    <a href={job.applyUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)', fontSize: '14px', fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                        Apply <ExternalLink size={12} />
-                    </a>
                 </div>
             </div>
         </div>
@@ -216,12 +321,17 @@ function DashboardPage() {
     const [mode, setMode] = useState('');
     const [exp, setExp] = useState('');
     const [source, setSource] = useState('');
+    const [statusFilter, setStatusFilter] = useState('All');
     const [sort, setSort] = useState('match');
     const [showOnlyMatches, setShowOnlyMatches] = useState(false);
     const [prefs, setPrefs] = useState<Preferences | null>(null);
+    const [toast, setToast] = useState('');
 
     const [savedIds, setSavedIds] = useState<string[]>([]);
     const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+
+    // Load status for filtering
+    const [jobStatuses, setJobStatuses] = useState<Record<string, JobStatus>>({});
 
     useEffect(() => {
         const saved = localStorage.getItem('savedJobs');
@@ -229,6 +339,9 @@ function DashboardPage() {
 
         const storedPrefs = localStorage.getItem('jobTrackerPreferences');
         if (storedPrefs) setPrefs(JSON.parse(storedPrefs));
+
+        const storedStatuses = JSON.parse(localStorage.getItem('jobTrackerStatus') || '{}');
+        setJobStatuses(storedStatuses);
     }, []);
 
     const handleSave = (id: string) => {
@@ -241,6 +354,12 @@ function DashboardPage() {
         const newSaved = savedIds.filter(savedId => savedId !== id);
         setSavedIds(newSaved);
         localStorage.setItem('savedJobs', JSON.stringify(newSaved));
+    };
+
+    const handleStatusChange = (id: string, status: JobStatus) => {
+        const newStatuses = { ...jobStatuses, [id]: status };
+        setJobStatuses(newStatuses);
+        setToast(`Status updated: ${status}`);
     };
 
     const jobsWithScores = useMemo(() => {
@@ -259,16 +378,21 @@ function DashboardPage() {
                 const matchesMode = mode === '' || job.mode === mode;
                 const matchesExp = exp === '' || job.experience === exp;
                 const matchesSource = source === '' || job.source === source;
-                const passesThreshold = !showOnlyMatches || (prefs && job.matchScore >= prefs.minMatchScore);
-                return matchesSearch && matchesLoc && matchesMode && matchesExp && matchesSource && passesThreshold;
+                const passesThreshold = !showOnlyMatches || (prefs && (job.matchScore || 0) >= prefs.minMatchScore);
+
+                // Status filtering logic
+                const jobStatus = jobStatuses[job.id] || 'Not Applied';
+                const matchesStatus = statusFilter === 'All' || jobStatus === statusFilter;
+
+                return matchesSearch && matchesLoc && matchesMode && matchesExp && matchesSource && passesThreshold && matchesStatus;
             })
             .sort((a, b) => {
                 if (sort === 'latest') return a.postedDaysAgo - b.postedDaysAgo;
-                if (sort === 'match') return b.matchScore - a.matchScore;
+                if (sort === 'match') return (b.matchScore || 0) - (a.matchScore || 0);
                 if (sort === 'salary') return getSalaryValue(b.salaryRange) - getSalaryValue(a.salaryRange);
                 return 0;
             });
-    }, [jobsWithScores, search, location, mode, exp, source, sort, showOnlyMatches, prefs]);
+    }, [jobsWithScores, search, location, mode, exp, source, sort, showOnlyMatches, prefs, statusFilter, jobStatuses]);
 
     const uniqueLocations = Array.from(new Set(JOBS.map(j => j.location)));
 
@@ -314,6 +438,13 @@ function DashboardPage() {
                         <option value="">All Locations</option>
                         {uniqueLocations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
                     </select>
+                    <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: '#fff' }}>
+                        <option value="All">All Statuses</option>
+                        <option value="Not Applied">Not Applied</option>
+                        <option value="Applied">Applied</option>
+                        <option value="Rejected">Rejected</option>
+                        <option value="Selected">Selected</option>
+                    </select>
                     <select value={mode} onChange={e => setMode(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: '#fff' }}>
                         <option value="">All Modes</option>
                         <option value="Remote">Remote</option>
@@ -327,24 +458,29 @@ function DashboardPage() {
                         <option value="1-3">1-3 Years</option>
                         <option value="3-5">3-5 Years</option>
                     </select>
-                    <select value={sort} onChange={e => setSort(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid var(--border-color)', background: '#fff' }}>
-                        <option value="match">Match Score (High-Low)</option>
-                        <option value="latest">Latest First</option>
-                        <option value="salary">Salary (High-Low)</option>
-                    </select>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderTop: '1px solid #EEE', paddingTop: '16px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: 500 }}>
-                        <input
-                            type="checkbox"
-                            checked={showOnlyMatches}
-                            onChange={e => setShowOnlyMatches(e.target.checked)}
-                            disabled={!prefs}
-                            style={{ width: '16px', height: '16px' }}
-                        />
-                        Show only jobs above my threshold ({prefs?.minMatchScore || 40}%)
-                    </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 'var(--space-24)' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: 500 }}>
+                            <input
+                                type="checkbox"
+                                checked={showOnlyMatches}
+                                onChange={e => setShowOnlyMatches(e.target.checked)}
+                                disabled={!prefs}
+                                style={{ width: '16px', height: '16px' }}
+                            />
+                            Show only jobs above my threshold ({prefs?.minMatchScore || 40}%)
+                        </label>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Filter size={14} style={{ color: '#777' }} />
+                        <select value={sort} onChange={e => setSort(e.target.value)} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #ddd', fontSize: '13px' }}>
+                            <option value="match">Match Score</option>
+                            <option value="latest">Latest First</option>
+                            <option value="salary">Salary (High-Low)</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -359,6 +495,7 @@ function DashboardPage() {
                             isSaved={savedIds.includes(job.id)}
                             onView={setSelectedJob}
                             matchScore={prefs ? job.matchScore : undefined}
+                            onStatusChange={handleStatusChange}
                         />
                     ))}
                 </div>
@@ -368,11 +505,13 @@ function DashboardPage() {
                     <p style={{ fontSize: '18px', color: '#555', margin: '0 auto', maxWidth: '400px' }}>
                         {prefs ? "No roles match your criteria. Adjust filters or lower threshold." : "No jobs match your search. Try adjusting the filters."}
                     </p>
-                    <button onClick={() => { setSearch(''); setLocation(''); setMode(''); setExp(''); setSource(''); setShowOnlyMatches(false); }} style={{ marginTop: 'var(--space-16)', background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', textDecoration: 'underline' }}>
+                    <button onClick={() => { setSearch(''); setLocation(''); setMode(''); setExp(''); setSource(''); setShowOnlyMatches(false); setStatusFilter('All'); }} style={{ marginTop: 'var(--space-16)', background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', textDecoration: 'underline' }}>
                         Clear all filters
                     </button>
                 </div>
             )}
+
+            <Toast message={toast} onClear={() => setToast('')} />
 
             <Modal isOpen={!!selectedJob} onClose={() => setSelectedJob(null)} title={selectedJob?.title || ''}>
                 {selectedJob && (
@@ -563,6 +702,7 @@ function SettingsPage() {
 function SavedPage() {
     const [savedJobs, setSavedJobs] = useState<(Job & { matchScore?: number })[]>([]);
     const [selectedJob, setSelectedJob] = useState<(Job & { matchScore?: number }) | null>(null);
+    const [toast, setToast] = useState('');
 
     useEffect(() => {
         const storedPrefs = localStorage.getItem('jobTrackerPreferences');
@@ -588,6 +728,10 @@ function SavedPage() {
         }
     };
 
+    const handleStatusChange = (status: JobStatus) => {
+        setToast(`Status updated: ${status}`);
+    };
+
     return (
         <PageContainer maxWidth="900px">
             <h1 style={{ fontSize: '40px', marginBottom: 'var(--space-8)' }}>Saved Jobs</h1>
@@ -604,6 +748,7 @@ function SavedPage() {
                             isSaved={true}
                             onView={setSelectedJob}
                             matchScore={job.matchScore}
+                            onStatusChange={(_, s) => handleStatusChange(s)}
                         />
                     ))}
                 </div>
@@ -616,6 +761,8 @@ function SavedPage() {
                     <Link to="/dashboard" style={{ display: 'inline-block', marginTop: 'var(--space-16)', color: 'var(--color-accent)', fontWeight: 600 }}>Explore Jobs</Link>
                 </div>
             )}
+
+            <Toast message={toast} onClear={() => setToast('')} />
 
             <Modal isOpen={!!selectedJob} onClose={() => setSelectedJob(null)} title={selectedJob?.title || ''}>
                 {selectedJob && (
@@ -812,10 +959,32 @@ function DigestPage() {
 
                     {/* Email Style Footer */}
                     <div style={{ padding: 'var(--space-32)', textAlign: 'center', backgroundColor: '#fafafa', borderTop: '1px solid #eee' }}>
-                        <p style={{ fontSize: '13px', color: '#888', margin: 0 }}>
+                        <p style={{ fontSize: '13px', color: '#888', margin: '0 0 var(--space-24) 0' }}>
                             This digest was generated based on your preferences.
                         </p>
-                        <p style={{ fontSize: '11px', color: '#bbb', marginTop: '12px', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+
+                        {/* Recent Status Updates */}
+                        <div style={{ textAlign: 'left', borderTop: '1px solid #eee', paddingTop: 'var(--space-24)', marginTop: 'var(--space-24)' }}>
+                            <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 'var(--space-16)', color: '#444' }}>Recent Status Updates</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                {JSON.parse(localStorage.getItem('jobTrackerStatusHistory') || '[]').slice(0, 5).map((update: StatusUpdate, i: number) => (
+                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                                        <div>
+                                            <span style={{ fontWeight: 600 }}>{update.jobTitle}</span> at <span style={{ color: 'var(--color-accent)' }}>{update.company}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <span style={getStatusStyles(update.status)}>{update.status}</span>
+                                            <span style={{ color: '#999', fontSize: '11px' }}>{new Date(update.timestamp).toLocaleDateString()}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                                {JSON.parse(localStorage.getItem('jobTrackerStatusHistory') || '[]').length === 0 && (
+                                    <p style={{ color: '#999', fontSize: '12px', textAlign: 'center' }}>No recent activity to show.</p>
+                                )}
+                            </div>
+                        </div>
+
+                        <p style={{ fontSize: '11px', color: '#bbb', marginTop: '32px', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
                             Demo Mode: Daily 9AM trigger simulated manually.
                         </p>
                     </div>
