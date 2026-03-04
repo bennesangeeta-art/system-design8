@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Link, useNavigate } from 'react-router-dom';
-import { Menu, X, Briefcase, Bookmark, Mail, Search, MapPin, Briefcase as BriefcaseIcon, Clock, ExternalLink, ChevronRight, Filter, AlertCircle, ChevronDown } from 'lucide-react';
+import { Menu, X, Bookmark, Mail, Search, MapPin, Briefcase as BriefcaseIcon, Clock, ExternalLink, Filter, AlertCircle } from 'lucide-react';
 import { JOBS, Job } from './data/jobs';
 
 // --- Types ---
@@ -563,12 +563,10 @@ function SettingsPage() {
 function SavedPage() {
     const [savedJobs, setSavedJobs] = useState<(Job & { matchScore?: number })[]>([]);
     const [selectedJob, setSelectedJob] = useState<(Job & { matchScore?: number }) | null>(null);
-    const [prefs, setPrefs] = useState<Preferences | null>(null);
 
     useEffect(() => {
         const storedPrefs = localStorage.getItem('jobTrackerPreferences');
         const p = storedPrefs ? JSON.parse(storedPrefs) : null;
-        setPrefs(p);
 
         const savedIdsString = localStorage.getItem('savedJobs');
         if (savedIdsString) {
@@ -666,15 +664,170 @@ function SavedPage() {
 }
 
 function DigestPage() {
+    const [digest, setDigest] = useState<(Job & { matchScore: number })[] | null>(null);
+    const [prefs, setPrefs] = useState<Preferences | null>(null);
+    const [copyStatus, setCopyStatus] = useState('');
+
+    const todayKey = `jobTrackerDigest_${new Date().toISOString().split('T')[0]}`;
+
+    useEffect(() => {
+        const storedPrefs = localStorage.getItem('jobTrackerPreferences');
+        if (storedPrefs) {
+            setPrefs(JSON.parse(storedPrefs));
+        }
+
+        const existingDigest = localStorage.getItem(todayKey);
+        if (existingDigest) {
+            setDigest(JSON.parse(existingDigest));
+        }
+    }, [todayKey]);
+
+    const generateDigest = () => {
+        if (!prefs) return;
+
+        const scored = JOBS.map(job => ({
+            ...job,
+            matchScore: calculateMatchScore(job, prefs)
+        }));
+
+        const top10 = scored
+            .sort((a, b) => {
+                if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+                return a.postedDaysAgo - b.postedDaysAgo;
+            })
+            .slice(0, 10);
+
+        setDigest(top10);
+        localStorage.setItem(todayKey, JSON.stringify(top10));
+    };
+
+    const getPlaintextDigest = () => {
+        if (!digest) return '';
+        let text = `Top 10 Jobs For You — 9AM Digest (${new Date().toLocaleDateString()})\n\n`;
+        digest.forEach((job, i) => {
+            text += `${i + 1}. ${job.title} at ${job.company}\n`;
+            text += `   Location: ${job.location} | Match: ${job.matchScore}%\n`;
+            text += `   Apply: ${job.applyUrl}\n\n`;
+        });
+        text += `Generated based on your preferences.\n`;
+        return text;
+    };
+
+    const copyToClipboard = () => {
+        navigator.clipboard.writeText(getPlaintextDigest());
+        setCopyStatus('Copied!');
+        setTimeout(() => setCopyStatus(''), 2000);
+    };
+
+    const createEmailDraft = () => {
+        const subject = encodeURIComponent(`My 9AM Job Digest - ${new Date().toLocaleDateString()}`);
+        const body = encodeURIComponent(getPlaintextDigest());
+        window.location.href = `mailto:?subject=${subject}&body=${body}`;
+    };
+
+    if (!prefs) {
+        return (
+            <PageContainer>
+                <h1 style={{ fontSize: '40px', marginBottom: 'var(--space-24)' }}>Daily Digest</h1>
+                <div className="card" style={{ textAlign: 'center', padding: 'var(--space-64) var(--space-16)' }}>
+                    <AlertCircle size={48} color="var(--color-accent)" style={{ marginBottom: 'var(--space-16)' }} />
+                    <p style={{ fontSize: '18px', color: '#555', margin: '0 auto', maxWidth: '400px' }}>
+                        Set your <Link to="/settings" style={{ color: 'var(--color-accent)', fontWeight: 600 }}>preferences</Link> to generate a personalized digest.
+                    </p>
+                </div>
+            </PageContainer>
+        );
+    }
+
     return (
-        <PageContainer>
-            <h1 style={{ fontSize: '40px', marginBottom: 'var(--space-24)' }}>Daily Digest</h1>
-            <div className="card" style={{ textAlign: 'center', padding: 'var(--space-64) var(--space-16)' }}>
-                <Mail size={48} color="#ccc" style={{ marginBottom: 'var(--space-16)' }} />
-                <p style={{ fontSize: '18px', color: '#555', margin: '0 auto', maxWidth: '400px' }}>
-                    In the future, this section will provide a curated daily summary of the best matches found across the web.
-                </p>
+        <PageContainer maxWidth="800px">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-40)' }}>
+                <h1 style={{ fontSize: '40px', margin: 0 }}>Daily Digest</h1>
+                {!digest && (
+                    <button className="btn-primary" onClick={generateDigest}>
+                        Generate Today's 9AM Digest
+                    </button>
+                )}
+                {digest && (
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                        <button onClick={copyToClipboard} style={{ backgroundColor: '#fff', border: '1px solid #ddd', fontSize: '14px', position: 'relative' }}>
+                            {copyStatus || 'Copy Digest'}
+                        </button>
+                        <button onClick={createEmailDraft} style={{ backgroundColor: '#fff', border: '1px solid #ddd', fontSize: '14px' }}>
+                            Email Draft
+                        </button>
+                        <button onClick={generateDigest} style={{ backgroundColor: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', fontSize: '13px', cursor: 'pointer' }}>
+                            Refresh
+                        </button>
+                    </div>
+                )}
             </div>
+
+            {digest ? (
+                <div style={{ backgroundColor: '#fff', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius)', overflow: 'hidden' }}>
+                    {/* Email Style Header */}
+                    <div style={{ padding: 'var(--space-40)', borderBottom: '1px solid #eee', textAlign: 'center', backgroundColor: '#fafafa' }}>
+                        <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '28px', marginBottom: 'var(--space-8)' }}>
+                            Top 10 Jobs For You — 9AM Digest
+                        </h2>
+                        <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>
+                            {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                        </p>
+                    </div>
+
+                    <div style={{ padding: 'var(--space-24)' }}>
+                        {digest.length > 0 ? (
+                            digest.map((job, idx) => (
+                                <div key={job.id} style={{
+                                    padding: 'var(--space-24)',
+                                    borderBottom: idx === digest.length - 1 ? 'none' : '1px solid #eee',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center'
+                                }}>
+                                    <div style={{ flex: 1 }}>
+                                        <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', fontWeight: 600 }}>{job.title}</h3>
+                                        <div style={{ display: 'flex', gap: '12px', fontSize: '13px', color: '#666' }}>
+                                            <span style={{ fontWeight: 600, color: 'var(--color-accent)' }}>{job.company}</span>
+                                            <span>{job.location} • {job.experience}</span>
+                                        </div>
+                                    </div>
+                                    <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                        <div style={{ fontSize: '14px', fontWeight: 600, color: '#2E7D32' }}>
+                                            {job.matchScore}% Match
+                                        </div>
+                                        <a href={job.applyUrl} target="_blank" rel="noopener noreferrer" className="btn-primary" style={{ fontSize: '13px', padding: '6px 16px', textDecoration: 'none' }}>
+                                            Apply
+                                        </a>
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: 'var(--space-64) 0' }}>
+                                <AlertCircle size={40} color="#ccc" style={{ marginBottom: '16px' }} />
+                                <p style={{ color: '#666' }}>No matching roles today. Check again tomorrow.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Email Style Footer */}
+                    <div style={{ padding: 'var(--space-32)', textAlign: 'center', backgroundColor: '#fafafa', borderTop: '1px solid #eee' }}>
+                        <p style={{ fontSize: '13px', color: '#888', margin: 0 }}>
+                            This digest was generated based on your preferences.
+                        </p>
+                        <p style={{ fontSize: '11px', color: '#bbb', marginTop: '12px', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                            Demo Mode: Daily 9AM trigger simulated manually.
+                        </p>
+                    </div>
+                </div>
+            ) : (
+                <div className="card" style={{ textAlign: 'center', padding: 'var(--space-64) var(--space-16)' }}>
+                    <Mail size={48} color="#ccc" style={{ marginBottom: 'var(--space-16)' }} />
+                    <p style={{ fontSize: '18px', color: '#555', margin: '0 auto', maxWidth: '400px' }}>
+                        Your daily briefing is ready to be generated.
+                    </p>
+                </div>
+            )}
         </PageContainer>
     );
 }
